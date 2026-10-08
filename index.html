@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive LR Parser Visualizer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Interactive LR Parser Visualizer</h1>
+  <p class="subtitle">Bottom-up parsing — LR(0), SLR(1), CLR(1), LALR(1)</p>
+</header>
+
+<div id="statusBar" class="status-bar"></div>
+
+<main class="app-shell">
+  <aside class="sidebar">
+    <section class="card parser-selector">
+      <h2>Parser Type</h2>
+      <div class="btn-group vertical">
+        <button class="parser-btn" data-parser="LR0">LR(0)</button>
+        <button class="parser-btn active" data-parser="SLR1">SLR(1)</button>
+        <button class="parser-btn" data-parser="CLR1">CLR(1)</button>
+        <button class="parser-btn" data-parser="LALR1">LALR(1)</button>
+      </div>
+    </section>
+
+    <section class="card sidebar-panel">
+      <h2>Workflow</h2>
+      <ol class="workflow">
+        <li class="active">Grammar</li>
+        <li>FIRST / FOLLOW</li>
+        <li>States</li>
+        <li>ACTION / GOTO</li>
+        <li>Conflicts</li>
+        <li>Parse</li>
+      </ol>
+    </section>
+
+    <section class="card sidebar-panel overview-card">
+      <h2>Overview</h2>
+      <div id="overviewStats" class="stats-grid"></div>
+    </section>
+  </aside>
+
+  <div class="content-panel">
+    <section class="card">
+      <h2>Grammar Input</h2>
+      <div class="grammar-row">
+        <textarea id="grammarInput" rows="6" placeholder="Enter grammar (one production per line)&#10;E -> E + T&#10;E -> T&#10;T -> id"></textarea>
+        <div class="grammar-actions">
+          <label for="exampleSelect">Load Example:</label>
+          <select id="exampleSelect">
+            <option value="">— select —</option>
+          </select>
+          <button id="buildBtn" class="btn primary">Build Parser</button>
+          <button id="clearBtn" class="btn ghost">Clear</button>
+        </div>
+      </div>
+      <div id="validationMsg"></div>
+    </section>
+
+    <!-- Parser Comparison -->
+    <section class="card hidden" id="comparisonSection"></section>
+
+    <!-- Inspector -->
+    <section class="card hidden" id="inspectorSection"></section>
+
+    <!-- Augmented Grammar -->
+    <section class="card" id="augmentedSection"></section>
+
+    <!-- FIRST / FOLLOW -->
+    <section class="card" id="firstFollowSection"></section>
+
+    <!-- Construction Controls -->
+    <div id="constructionControls" class="controls-bar hidden">
+      <h3>State Construction</h3>
+      <div class="btn-group">
+        <button id="prevStepBtn" class="btn small">◀ Prev</button>
+        <button id="nextStepBtn" class="btn small primary">Next ▶</button>
+        <button id="buildAllBtn" class="btn small">Build All</button>
+        <button id="resetStepBtn" class="btn small">Reset</button>
+      </div>
+    </div>
+
+    <!-- Canonical States -->
+    <section class="card" id="statesSection"></section>
+
+    <!-- State Graph -->
+    <section class="card" id="graphSection"></section>
+
+    <!-- Table Controls -->
+    <div id="tableControls" class="controls-bar hidden">
+      <h3>Table Construction</h3>
+      <div class="btn-group">
+        <button id="prevTableBtn" class="btn small">◀ Prev</button>
+        <button id="nextTableBtn" class="btn small primary">Next ▶</button>
+        <button id="buildAllTableBtn" class="btn small">Build All</button>
+        <button id="resetTableBtn" class="btn small">Reset</button>
+      </div>
+    </div>
+
+    <!-- ACTION / GOTO Table -->
+    <section class="card" id="tableSection"></section>
+
+    <!-- Conflicts -->
+    <section class="card" id="conflictSection"></section>
+
+    <!-- String Parsing -->
+    <section class="card hidden" id="parseSection">
+      <h2>String Parsing</h2>
+      <div class="parse-row">
+        <input type="text" id="parseInput" placeholder="Enter tokens separated by spaces, e.g.: id + id" />
+        <button id="parseBtn" class="btn primary">Parse</button>
+      </div>
+      <div id="parseControls" class="controls-bar hidden">
+        <div class="btn-group">
+          <button id="prevParseBtn" class="btn small">◀ Prev</button>
+          <button id="nextParseBtn" class="btn small primary">Next ▶</button>
+          <button id="parseAllBtn" class="btn small">Run All</button>
+          <button id="resetParseBtn" class="btn small">Reset</button>
+        </div>
+      </div>
+      <div id="parseResultSection"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <p>Interactive LR Parser Visualizer — Compiler Design Project</p>
+</footer>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

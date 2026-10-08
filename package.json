@@ -1,0 +1,10 @@
+{
+  "name": "interactive-lr-parser-visualizer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/tests.js",
+    "start": "python -m http.server 8000"
+  }
+}
