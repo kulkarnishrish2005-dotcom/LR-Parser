@@ -9,6 +9,7 @@ import { buildParseTable, formatAction, getActions } from './table.js';
 import { tokenize, parseString } from './parser.js';
 import { formatLR0Item, formatLR1Item, symbolAfterDot, isReduceItem } from './items.js';
 import { renderGraph } from './graph.js';
+import { buildOperatorPrecedenceModel, parseOperatorPrecedence } from './operator-precedence.js';
 
 // ─── State ───────────────────────────────────────────────────────
 let currentParser = 'SLR1';
@@ -17,6 +18,7 @@ let firstSets = null;
 let followSets = null;
 let collection = null;    // canonical collection for current parser
 let table = null;
+let precedenceModel = null;
 let constructionSteps = [];
 let constructionPos = 0;  // index into steps already revealed
 let builtStatesCount = 0;
@@ -103,6 +105,7 @@ function resetAll() {
   followSets = null;
   collection = null;
   table = null;
+  precedenceModel = null;
   constructionSteps = [];
   constructionPos = 0;
   builtStatesCount = 0;
@@ -155,6 +158,30 @@ function buildParser() {
   // Show augmented grammar
   renderAugmented();
 
+  if (currentParser === 'OP') {
+    firstSets = computeFirstSets(grammar);
+    followSets = computeFollowSets(grammar, firstSets);
+    precedenceModel = buildOperatorPrecedenceModel(grammar);
+    table = {
+      action: new Map(),
+      goto_: new Map(),
+      conflicts: precedenceModel.conflicts,
+      terminals: precedenceModel.terminals,
+      nonTerminals: Array.from(grammar.nonTerminals),
+      steps: [],
+    };
+    renderFirstFollow();
+    renderOverviewStats();
+    renderOperatorPrecedenceTable();
+    renderOperatorPrecedenceConflicts();
+    $('constructionControls').classList.add('hidden');
+    $('tableControls').classList.add('hidden');
+    $('parseSection').classList.remove('hidden');
+    updateStatus();
+    updateWorkflow('table');
+    return;
+  }
+
   // Compute FIRST and FOLLOW
   firstSets = computeFirstSets(grammar);
   followSets = computeFollowSets(grammar, firstSets);
@@ -174,6 +201,20 @@ function buildParser() {
 }
 
 function buildCollection() {
+  if (currentParser === 'OP') {
+    precedenceModel = buildOperatorPrecedenceModel(grammar);
+    table = {
+      action: new Map(),
+      goto_: new Map(),
+      conflicts: precedenceModel.conflicts,
+      terminals: precedenceModel.terminals,
+      nonTerminals: Array.from(grammar.nonTerminals),
+      steps: [],
+    };
+    renderOperatorPrecedenceTable();
+    renderOperatorPrecedenceConflicts();
+    return;
+  }
   if (currentParser === 'LR0' || currentParser === 'SLR1') {
     const result = buildLR0Collection(grammar);
     collection = result;
@@ -307,14 +348,29 @@ function buildAllTableSteps() {
 // ─── Parse stepping ──────────────────────────────────────────────
 
 function startParse() {
-  if (!table) {
-    alert('Please build the parser and complete table construction first.');
-    return;
-  }
-
   const input = $('parseInput').value.trim();
   if (!input) {
     $('parseResultSection').innerHTML = '<div class="msg error">Please enter a string to parse.</div>';
+    return;
+  }
+
+  if (currentParser === 'OP') {
+    if (!precedenceModel) {
+      precedenceModel = buildOperatorPrecedenceModel(grammar);
+    }
+    const tokens = tokenize(input);
+    const result = parseOperatorPrecedence(tokens, precedenceModel);
+    parseSteps = result.steps;
+    parsePos = 0;
+    $('parseControls').classList.remove('hidden');
+    $('parseResultSection').innerHTML = '';
+    renderParseTable();
+    updateWorkflow('parse');
+    return;
+  }
+
+  if (!table) {
+    alert('Please build the parser and complete table construction first.');
     return;
   }
 
@@ -674,7 +730,60 @@ function renderGraph_() {
   renderGraph(partial, currentParser, grammar.productions, $('graphSection'));
 }
 
+function renderOperatorPrecedenceTable() {
+  const el = $('tableSection');
+  if (!precedenceModel) return;
+
+  const terminals = precedenceModel.terminals;
+  const rows = terminals.map(row => {
+    const cells = terminals.map(col => {
+      const relation = precedenceModel.relations.get(row)?.get(col) || '';
+      const className = relation ? `rel-${relation}` : '';
+      return `<td class="${className}">${relation || ''}</td>`;
+    }).join('');
+    return `<tr><th>${escHtml(row)}</th>${cells}</tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <h3>Operator Precedence Relations</h3>
+    <div class="table-scroll">
+      <table class="parse-table">
+        <thead><tr><th></th>${terminals.map(t => `<th>${escHtml(t)}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderOperatorPrecedenceConflicts() {
+  const el = $('conflictSection');
+  if (!precedenceModel) {
+    el.innerHTML = '';
+    return;
+  }
+
+  if (precedenceModel.conflicts.length === 0) {
+    el.innerHTML = '<div class="msg success">✓ No precedence conflicts detected.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="msg warning"><strong>⚠ ${precedenceModel.conflicts.length} precedence conflict${precedenceModel.conflicts.length > 1 ? 's' : ''}</strong></div>
+    ${precedenceModel.conflicts.map(conflict => `
+      <div class="conflict-card">
+        <div class="conflict-type">CONFLICT</div>
+        <div>Pair: ${escHtml(conflict.left)} / ${escHtml(conflict.right)}</div>
+        <div>Relations: ${conflict.relations.map(r => escHtml(r)).join(' / ')}</div>
+      </div>
+    `).join('')}
+  `;
+}
+
 function renderTable() {
+  if (currentParser === 'OP') {
+    renderOperatorPrecedenceTable();
+    return;
+  }
   if (!table) return;
 
   const el = $('tableSection');
@@ -742,6 +851,10 @@ function renderTable() {
 }
 
 function renderConflicts() {
+  if (currentParser === 'OP') {
+    renderOperatorPrecedenceConflicts();
+    return;
+  }
   if (!table) return;
 
   const el = $('conflictSection');
@@ -838,14 +951,17 @@ function renderParseTable() {
 function updateStatus() {
   const parts = [];
   parts.push(`Parser: <strong>${parserDisplayName()}</strong>`);
-  if (collection) {
+  if (currentParser === 'OP' && precedenceModel) {
+    parts.push(`Relations: <strong>${precedenceModel.relations.size}</strong>`);
+    parts.push(`Conflicts: <strong>${precedenceModel.conflicts.length}</strong>`);
+  } else if (collection) {
     const totalStates = collection.states.length;
     const totalSteps = constructionSteps.length;
     parts.push(`States: <strong>${builtStatesCount} / ${totalStates}</strong>`);
     const pct = constructionPos >= totalSteps ? '100' : Math.floor((constructionPos / totalSteps) * 100);
     parts.push(`Construction: <strong>${constructionPos >= totalSteps ? 'Complete' : pct + '%'}</strong>`);
   }
-  if (table) {
+  if (table && currentParser !== 'OP') {
     parts.push(`Table: <strong>${tablePos} / ${tableSteps.length}</strong>`);
     parts.push(`Conflicts: <strong>${table.conflicts.length}</strong>`);
   }
@@ -857,11 +973,19 @@ function renderOverviewStats() {
   const items = [];
 
   if (grammar) {
-    items.push({ label: 'States', value: collection ? String(collection.states.length) : '—' });
-    items.push({ label: 'Productions', value: String(grammar.productions.length) });
-    items.push({ label: 'Terminals', value: String(grammar.terminals.size) });
-    items.push({ label: 'Non-Terminals', value: String(grammar.nonTerminals.size) });
-    items.push({ label: 'Conflicts', value: table ? String(table.conflicts.length) : '—' });
+    if (currentParser === 'OP' && precedenceModel) {
+      items.push({ label: 'Relations', value: String(precedenceModel.relations.size) });
+      items.push({ label: 'Productions', value: String(grammar.productions.length) });
+      items.push({ label: 'Terminals', value: String(grammar.terminals.size) });
+      items.push({ label: 'Non-Terminals', value: String(grammar.nonTerminals.size) });
+      items.push({ label: 'Conflicts', value: String(precedenceModel.conflicts.length) });
+    } else {
+      items.push({ label: 'States', value: collection ? String(collection.states.length) : '—' });
+      items.push({ label: 'Productions', value: String(grammar.productions.length) });
+      items.push({ label: 'Terminals', value: String(grammar.terminals.size) });
+      items.push({ label: 'Non-Terminals', value: String(grammar.nonTerminals.size) });
+      items.push({ label: 'Conflicts', value: table ? String(table.conflicts.length) : '—' });
+    }
   } else {
     items.push({ label: 'States', value: '—' });
     items.push({ label: 'Productions', value: '—' });
@@ -888,7 +1012,7 @@ function updateWorkflow(stage) {
 }
 
 function parserDisplayName() {
-  const names = { 'LR0': 'LR(0)', 'SLR1': 'SLR(1)', 'CLR1': 'CLR(1)', 'LALR1': 'LALR(1)' };
+  const names = { 'LR0': 'LR(0)', 'SLR1': 'SLR(1)', 'CLR1': 'CLR(1)', 'LALR1': 'LALR(1)', 'OP': 'Operator Precedence' };
   return names[currentParser] || currentParser;
 }
 

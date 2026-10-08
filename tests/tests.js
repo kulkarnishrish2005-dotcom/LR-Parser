@@ -7,6 +7,7 @@ import { buildCLRCollection } from '../src/clr.js';
 import { buildLALRFromCLR } from '../src/lalr.js';
 import { buildParseTable } from '../src/table.js';
 import { tokenize, parseString } from '../src/parser.js';
+import { computeFirstVT, computeLastVT, buildOperatorPrecedenceModel, parseOperatorPrecedence } from '../src/operator-precedence.js';
 
 let passed = 0;
 let failed = 0;
@@ -197,6 +198,35 @@ assert(result.accepted === true,
 const result2 = parseString(['id', '+', 'id', 'extra'], testTable);
 assert(result2.accepted === false,
   'Parsing "id + id extra" with LR(0) table rejects');
+
+console.log('\n=== OPERATOR PRECEDENCE ===');
+
+const precedenceGrammar = parseGrammar('E -> E + T\nE -> T\nT -> T * F\nT -> F\nF -> ( E )\nF -> id');
+const precedenceModel = buildOperatorPrecedenceModel(precedenceGrammar);
+
+const firstVT = computeFirstVT(precedenceGrammar);
+assert(firstVT.get('E')?.has('id') && firstVT.get('E')?.has('('),
+  'FIRSTVT(E) contains leading terminals');
+
+const lastVT = computeLastVT(precedenceGrammar);
+assert(lastVT.get('E')?.has('id') && lastVT.get('E')?.has(')'),
+  'LASTVT(E) contains trailing terminals');
+
+assert(precedenceModel.relations.size > 0,
+  'Precedence relations are generated between terminals');
+
+const conflictGrammar = parseGrammar('S -> a b\nD -> a E\nE -> b');
+const conflictModel = buildOperatorPrecedenceModel(conflictGrammar);
+assert(conflictModel.conflicts.length > 0,
+  'Precedence conflict detection records ambiguous pairs');
+
+const acceptedPrec = parseOperatorPrecedence(['id', '+', 'id'], precedenceModel);
+assert(acceptedPrec.accepted === true,
+  'Operator precedence parser accepts valid arithmetic input');
+
+const rejectedPrec = parseOperatorPrecedence(['id', '+', '*', 'id'], precedenceModel);
+assert(rejectedPrec.accepted === false,
+  'Operator precedence parser rejects invalid arithmetic input');
 
 // ─── Summary ───
 console.log(`\n=== TEST SUMMARY ===`);
