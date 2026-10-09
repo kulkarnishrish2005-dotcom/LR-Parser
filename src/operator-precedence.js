@@ -283,6 +283,10 @@ export function parseOperatorPrecedence(tokens, model) {
   const record = (action, stackText, remainingText) => {
     steps.push({ stack: stackText, input: remainingText, action });
   };
+  const reject = (error) => {
+    steps.push({ stack: `${operatorStack.join(' ')} | ${output.join(' ')}`, input: '', action: `REJECT: ${error}` });
+    return { steps, accepted: false, error };
+  };
 
   for (const token of input) {
     const stackText = `${operatorStack.join(' ')} | ${output.join(' ')}`;
@@ -306,7 +310,7 @@ export function parseOperatorPrecedence(tokens, model) {
       }
       if (!found) {
         record('ERROR: missing opening parenthesis', stackText, remainingText);
-        return { steps, accepted: false, error: 'Missing opening parenthesis' };
+        return reject('Missing opening parenthesis');
       }
       record(`REDUCE (...)`, stackText, remainingText);
       continue;
@@ -333,7 +337,7 @@ export function parseOperatorPrecedence(tokens, model) {
   while (operatorStack.length > 0) {
     const op = operatorStack.pop();
     if (op === '(') {
-      return { steps, accepted: false, error: 'Unbalanced parentheses' };
+      return reject('Unbalanced parentheses');
     }
     output.push(op);
   }
@@ -345,7 +349,7 @@ export function parseOperatorPrecedence(tokens, model) {
       continue;
     }
     if (evalStack.length < 2) {
-      return { steps, accepted: false, error: 'Malformed operator precedence expression' };
+      return reject('Malformed operator precedence expression');
     }
     evalStack.pop();
     evalStack.pop();
@@ -356,7 +360,7 @@ export function parseOperatorPrecedence(tokens, model) {
   if (accepted) {
     steps.push({ stack: output.join(' '), input: '', action: 'ACCEPT' });
   } else {
-    steps.push({ stack: output.join(' '), input: '', action: 'REJECT' });
+    return reject('Expression rejected by the operator precedence parser');
   }
 
   return { steps, accepted, error: accepted ? null : 'Expression rejected by the operator precedence parser' };

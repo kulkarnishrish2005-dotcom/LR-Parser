@@ -30,7 +30,7 @@ console.log(`LR(0) steps: ${gaLR0.steps.length}`);
 const gaSLRTable = buildParseTable('SLR1', gaLR0, gaAug, gaFollow);
 console.log(`SLR(1) conflicts: ${gaSLRTable.conflicts.length}`);
 console.log(`SLR(1) ACTION entries: ${gaSLRTable.action.size}`);
-console.log(`SLR(1) GOTO entries: ${gaSLRTable.goto_.size}`;
+console.log(`SLR(1) GOTO entries: ${gaSLRTable.goto_.size}`);
 
 // Test parsing
 const gaTokens = ['id', '+', 'id', '$'];

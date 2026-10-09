@@ -1,6 +1,6 @@
 // String parsing engine — classic bottom-up LR parsing
 
-import { getAction, formatAction } from './table.js';
+import { getActions, formatAction } from './table.js';
 
 /**
  * @typedef {Object} ParseStep
@@ -50,7 +50,14 @@ export function parseString(tokens, table, productions = table?.productions || [
     const stackStr = formatStack(stack);
     const inputStr = input.slice(pos).join(' ');
 
-    const act = getAction(actionTable, state, sym);
+    const actions = getActions(actionTable, state, sym);
+    if (actions.length > 1) {
+      const choices = actions.map(formatAction).join(' / ');
+      const message = `CONFLICT: ACTION[${state}, ${sym}] has ${choices}. Parsing stopped.`;
+      steps.push({ stack: stackStr, input: inputStr, action: message });
+      return { steps, accepted: false, error: message };
+    }
+    const act = actions[0];
 
     if (!act) {
       steps.push({

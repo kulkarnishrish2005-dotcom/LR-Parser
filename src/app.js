@@ -5,11 +5,13 @@ import { computeFirstSets, computeFollowSets } from './firstfollow.js';
 import { buildLR0Collection } from './lr0.js';
 import { buildCLRCollection } from './clr.js';
 import { buildLALRFromCLR } from './lalr.js';
-import { buildParseTable, formatAction, getActions } from './table.js';
+import { buildParseTable, formatAction } from './table.js';
 import { tokenize, parseString } from './parser.js';
-import { formatLR0Item, formatLR1Item, symbolAfterDot, isReduceItem } from './items.js';
+import { formatLR0Item, formatLR1Item, symbolAfterDot } from './items.js';
 import { renderGraph } from './graph.js';
 import { buildOperatorPrecedenceModel, parseOperatorPrecedence } from './operator-precedence.js';
+import { explainActions } from './action-explanation.js';
+import { EXAMPLES, STRING_EXAMPLES } from './examples.js';
 
 // ─── State ───────────────────────────────────────────────────────
 let currentParser = 'SLR1';
@@ -26,20 +28,23 @@ let tableSteps = [];
 let tablePos = 0;
 let parseSteps = [];
 let parsePos = 0;
-
-// ─── Example grammars ────────────────────────────────────────────
-const EXAMPLES = {
-  'Simple Expression': 'E -> E + T\nE -> T\nT -> id',
-  'Parenthesized Expression': 'E -> E + T\nE -> T\nT -> T * F\nT -> F\nF -> ( E )\nF -> id',
-  'Conflict Grammar': 'E -> E + E\nE -> E * E\nE -> id',
-  'Simple Grammar': 'S -> A\nA -> a',
-  'Epsilon Grammar': 'S -> A B\nA -> a\nA -> ε\nB -> b',
-};
+let selectedStateId = null;
+let activeStepMode = 'states';
 
 // ─── DOM references ──────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
 function init() {
+  $('stepMode').addEventListener('change', e => setStepMode(e.target.value));
+  $('stickyPrev').addEventListener('click', () => runStickyStep('prev'));
+  $('stickyNext').addEventListener('click', () => runStickyStep('next'));
+  $('stickyAll').addEventListener('click', () => runStickyStep('all'));
+  document.querySelectorAll('.section-nav a').forEach(link => link.addEventListener('click', () => {
+    const target = link.getAttribute('href');
+    if (target === '#statesSection' || target === '#graphSection') setStepMode('states');
+    if (target === '#tableSection' || target === '#conflictSection') setStepMode('table');
+    if (target === '#parseSection') setStepMode('parse');
+  }));
   // Parser selector buttons
   document.querySelectorAll('.parser-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -54,7 +59,28 @@ function init() {
   $('exampleSelect').addEventListener('change', (e) => {
     if (e.target.value && EXAMPLES[e.target.value]) {
       $('grammarInput').value = EXAMPLES[e.target.value];
+      refreshStringExamples();
+      resetAll();
     }
+  });
+  $('grammarInput').addEventListener('input', () => {
+    refreshStringExamples();
+    resetAll();
+  });
+  $('parseExampleSelect').addEventListener('change', e => {
+    $('parseInput').value = e.target.value;
+    parseSteps = [];
+    parsePos = 0;
+    $('parseControls').classList.add('hidden');
+    $('parseResultSection').innerHTML = '';
+    setStepMode('parse');
+  });
+  $('parseInput').addEventListener('input', () => {
+    if ($('parseExampleSelect').value !== $('parseInput').value) $('parseExampleSelect').value = '';
+    parseSteps = [];
+    parsePos = 0;
+    $('parseControls').classList.add('hidden');
+    $('parseResultSection').innerHTML = '';
   });
 
   // Populate example dropdown
@@ -91,12 +117,57 @@ function init() {
   $('clearBtn').addEventListener('click', () => {
     $('grammarInput').value = '';
     $('validationMsg').innerHTML = '';
+    refreshStringExamples();
+    resetAll();
   });
 
   // Set default grammar
   $('grammarInput').value = EXAMPLES['Simple Expression'];
   $('exampleSelect').value = 'Simple Expression';
+  refreshStringExamples();
   updateWorkflow('grammar');
+}
+
+function refreshStringExamples() {
+  const selectedGrammar = $('grammarInput').value.trim();
+  const name = Object.keys(EXAMPLES).find(key => EXAMPLES[key].trim() === selectedGrammar);
+  const select = $('parseExampleSelect');
+  select.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = name ? 'Choose a sample string' : 'No samples for this grammar';
+  select.appendChild(placeholder);
+  for (const sample of STRING_EXAMPLES[name] || []) {
+    const option = document.createElement('option');
+    option.value = sample.input;
+    option.textContent = sample.label;
+    select.appendChild(option);
+  }
+  select.disabled = !name;
+  $('exampleSelect').value = name || '';
+  $('parseInput').value = '';
+  parseSteps = [];
+  parsePos = 0;
+  $('parseControls').classList.add('hidden');
+  $('parseResultSection').innerHTML = '';
+}
+
+function setStepMode(mode) {
+  activeStepMode = mode;
+  $('stepMode').value = mode;
+  $('stickyAll').textContent = mode === 'parse' ? 'Run All' : 'Build All';
+  $('stickySteps').classList.toggle('hidden', !grammar || (currentParser === 'OP' && mode !== 'parse') || (mode === 'parse' && parseSteps.length === 0));
+}
+
+function runStickyStep(direction) {
+  const handlers = {
+    states: { prev: prevConstructionStep, next: nextConstructionStep, all: buildAllSteps },
+    table: { prev: prevTableStep, next: nextTableStep, all: buildAllTableSteps },
+    parse: { prev: prevParseStep, next: nextParseStep, all: parseAll },
+  };
+  if (activeStepMode === 'table' && tableSteps.length === 0) return;
+  if (activeStepMode === 'parse' && parseSteps.length === 0) return;
+  handlers[activeStepMode][direction]();
 }
 
 function resetAll() {
@@ -113,6 +184,7 @@ function resetAll() {
   tablePos = 0;
   parseSteps = [];
   parsePos = 0;
+  selectedStateId = null;
 
   $('augmentedSection').innerHTML = '';
   $('firstFollowSection').innerHTML = '';
@@ -133,6 +205,7 @@ function resetAll() {
   $('parseControls').classList.add('hidden');
   renderOverviewStats();
   updateWorkflow('grammar');
+  $('stickySteps').classList.add('hidden');
 }
 
 function buildParser() {
@@ -153,6 +226,7 @@ function buildParser() {
   }
 
   grammar = augmentGrammar(parsed);
+  setStepMode('states');
   showValidation(['Grammar parsed successfully.'], 'success');
 
   // Show augmented grammar
@@ -179,6 +253,7 @@ function buildParser() {
     $('parseSection').classList.remove('hidden');
     updateStatus();
     updateWorkflow('table');
+    $('stickySteps').classList.add('hidden');
     return;
   }
 
@@ -307,6 +382,7 @@ function buildTableSteps() {
   renderOverviewStats();
   updateStatus();
   updateWorkflow('table');
+  setStepMode('table');
 }
 
 // ─── Table stepping ──────────────────────────────────────────────
@@ -365,6 +441,7 @@ function startParse() {
     $('parseControls').classList.remove('hidden');
     $('parseResultSection').innerHTML = '';
     renderParseTable();
+    setStepMode('parse');
     updateWorkflow('parse');
     return;
   }
@@ -387,6 +464,7 @@ function startParse() {
   $('parseControls').classList.remove('hidden');
   $('parseResultSection').innerHTML = '';
   renderParseTable();
+  setStepMode('parse');
   updateWorkflow('parse');
 }
 
@@ -579,46 +657,22 @@ function explainTableCell(stateId, symbol, kind) {
   if (!collection || !collection.states) return '';
   const state = collection.states.find(s => s.id === stateId);
   if (!state) return 'No state information available.';
-
-  const items = (state.items || []).filter(item => {
-    if (kind === 'goto') return symbolAfterDot(item, grammar.productions) === symbol;
-    if (kind === 'shift') return symbolAfterDot(item, grammar.productions) === symbol;
-    if (kind === 'reduce') return isReduceItem(item, grammar.productions);
-    return false;
-  });
-
-  const itemList = items.length
-    ? items.map(item => {
-        const fmt = (currentParser === 'CLR1' || currentParser === 'LALR1') ? formatLR1Item : formatLR0Item;
-        return `<li>${escHtml(fmt(item, grammar.productions))}</li>`;
-      }).join('')
-    : '<li>No matching item found.</li>';
-
-  let summary = '';
   if (kind === 'goto') {
     const target = state.transitions.get(symbol);
-    summary = `GOTO from I${stateId} on ${escHtml(symbol)} -> I${target}`;
-  } else if (kind === 'shift') {
-    const target = state.transitions.get(symbol);
-    summary = `SHIFT on ${escHtml(symbol)} -> I${target}`;
-  } else if (kind === 'reduce') {
-    const reduceItems = (state.items || []).filter(item => isReduceItem(item, grammar.productions));
-    const match = reduceItems.map(item => {
-      const prod = grammar.productions.find(p => p.id === item.prodId);
-      return prod ? `${prod.lhs} → ${prod.rhs.length === 0 ? 'ε' : prod.rhs.join(' ')}` : 'unknown production';
-    }).join('<br>');
-    summary = `Reduce using:<br>${match}`;
+    const items = state.items.filter(item => symbolAfterDot(item, grammar.productions) === symbol);
+    const fmt = (currentParser === 'CLR1' || currentParser === 'LALR1') ? formatLR1Item : formatLR0Item;
+    return `<div class="inspector-box"><div class="inspector-header">GOTO / ${escHtml(symbol)}</div>
+      <div class="inspector-body"><p>GOTO(I${stateId}, ${escHtml(symbol)}) = I${target}</p>
+      <ul class="inspector-list">${items.map(item => `<li>${escHtml(fmt(item, grammar.productions))}</li>`).join('')}</ul></div></div>`;
   }
-
-  return `
-    <div class="inspector-box">
-      <div class="inspector-header">${kind.toUpperCase()} / ${escHtml(symbol)}</div>
-      <div class="inspector-body">
-        <p>${summary}</p>
-        <ul class="inspector-list">${itemList}</ul>
-      </div>
-    </div>
-  `;
+  const actions = tableSteps.slice(0, tablePos)
+    .filter(step => step.type === 'action' && step.stateId === stateId && step.symbol === symbol)
+    .map(step => step.action);
+  if (!actions.length) return '<div class="inspector-box">No ACTION in this cell.</div>';
+  const details = explainActions(state, symbol, actions, currentParser, grammar.productions, followSets);
+  return `<div class="inspector-box"><div class="inspector-header">ACTION[I${stateId}, ${escHtml(symbol)}]</div>
+    <div class="inspector-body">${details.map(detail => `<p><strong>${escHtml(detail.title)}</strong> — ${escHtml(detail.reason)}</p>
+      <ul class="inspector-list">${detail.items.map(item => `<li>${escHtml(item)}</li>`).join('')}</ul>`).join('')}</div></div>`;
 }
 
 function explainConflict(conflict) {
@@ -662,18 +716,22 @@ function renderStates() {
 
   for (const step of stateSteps) {
     const stateId = step.stateId;
+    const expanded = selectedStateId === stateId;
     const derivation = (collection && collection.states && collection.states[stateId]) ? (collection.states[stateId].derivation || { detail: 'Closure expansion' }) : { detail: 'Closure expansion' };
-    html += `<div class="state-card" id="state-${stateId}" data-state-id="${stateId}">`;
+    html += `<div class="state-card ${expanded ? 'selected' : ''}" id="state-${stateId}" data-state-id="${stateId}">`;
     html += `<div class="state-title">I${stateId}</div>`;
     html += `<div class="state-meta">${escHtml(derivation.detail)}</div>`;
     if (currentParser === 'LALR1' && step.mergedFrom) {
       html += `<div class="state-meta">Merged CLR states: ${step.mergedFrom.map(id => `I${id}`).join(', ')}</div>`;
     }
     html += '<div class="state-items">';
-    for (const item of step.items) {
-      html += `<div class="item">${escHtml(fmt(item, grammar.productions))}</div>`;
+    for (const [index, item] of step.items.entries()) {
+      html += `<div class="item ${index >= 3 && !expanded ? 'hidden' : ''}">${escHtml(fmt(item, grammar.productions))}</div>`;
     }
     html += '</div>';
+    if (step.items.length > 3) {
+      html += `<button class="state-expand" type="button" aria-expanded="${expanded}">${expanded ? 'Collapse' : `Expand · +${step.items.length - 3} more items`}</button>`;
+    }
 
     // Show transitions for this state
     const trans = transSteps.filter(t => t.from === stateId);
@@ -694,9 +752,16 @@ function renderStates() {
   el.querySelectorAll('.state-card').forEach(card => {
     card.addEventListener('click', () => {
       const sid = Number(card.dataset.stateId);
+      selectedStateId = sid;
       showInspector(explainState(sid));
-      el.querySelectorAll('.state-card').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
+      renderStates();
+    });
+    card.querySelector('.state-expand')?.addEventListener('click', event => {
+      event.stopPropagation();
+      const sid = Number(card.dataset.stateId);
+      selectedStateId = selectedStateId === sid ? null : sid;
+      if (selectedStateId !== null) showInspector(explainState(sid));
+      renderStates();
     });
   });
 }
@@ -727,7 +792,12 @@ function renderGraph_() {
   }
 
   const partial = { states: partialStates };
-  renderGraph(partial, currentParser, grammar.productions, $('graphSection'));
+  renderGraph(partial, currentParser, grammar.productions, $('graphSection'), stateId => {
+    selectedStateId = stateId;
+    renderStates();
+    showInspector(explainState(stateId));
+    $('inspectorSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 function renderOperatorPrecedenceTable() {
@@ -873,15 +943,8 @@ function renderConflicts() {
   }
 
   // Deduplicate conflicts
-  const seen = new Set();
-  const uniqueConflicts = [];
-  for (const c of table.conflicts) {
-    const key = `${c.stateId},${c.symbol}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueConflicts.push(c);
-    }
-  }
+  const visibleKeys = new Set(conflictSteps.map(step => `${step.stateId},${step.symbol}`));
+  const uniqueConflicts = table.conflicts.filter(c => visibleKeys.has(`${c.stateId},${c.symbol}`));
 
   let html = `<div class="msg warning"><strong>⚠ ${uniqueConflicts.length} CONFLICT${uniqueConflicts.length > 1 ? 'S' : ''} DETECTED</strong><br>Grammar is NOT ${parserDisplayName()}.</div>`;
   for (const c of uniqueConflicts) {
@@ -924,7 +987,7 @@ function renderParseTable() {
   for (let i = 0; i < visible.length; i++) {
     const s = visible[i];
     const isLast = i === visible.length - 1;
-    const rowClass = isLast ? (s.action.startsWith('ACCEPT') ? 'accept-row' : s.action.startsWith('ERROR') ? 'error-row' : '') : '';
+    const rowClass = isLast ? (s.action.startsWith('ACCEPT') ? 'accept-row' : /^(ERROR|REJECT|CONFLICT)/.test(s.action) ? 'error-row' : '') : '';
     html += `<tr class="${rowClass}">`;
     html += `<td>${i + 1}</td>`;
     html += `<td class="mono">${escHtml(s.stack)}</td>`;
@@ -940,8 +1003,8 @@ function renderParseTable() {
     const last = parseSteps[parseSteps.length - 1];
     if (last.action.startsWith('ACCEPT')) {
       html += '<div class="msg success parse-result">✓ ACCEPTED</div>';
-    } else if (last.action.startsWith('ERROR')) {
-      html += `<div class="msg error parse-result">✗ REJECTED<br><pre>${escHtml(last.action.replace('ERROR: ', ''))}</pre></div>`;
+    } else if (/^(ERROR|REJECT|CONFLICT)/.test(last.action)) {
+      html += `<div class="msg error parse-result">✗ REJECTED<br><pre>${escHtml(last.action.replace(/^(ERROR|REJECT|CONFLICT):?\s*/, ''))}</pre></div>`;
     }
   }
 

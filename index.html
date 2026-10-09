@@ -13,7 +13,19 @@
   <p class="subtitle">Bottom-up parsing — LR(0), SLR(1), CLR(1), LALR(1)</p>
 </header>
 
-<div id="statusBar" class="status-bar"></div>
+<div class="demo-rail">
+  <div id="statusBar" class="status-bar"></div>
+  <nav class="section-nav" aria-label="Jump to section">
+    <a href="#grammarSection">Grammar</a><a href="#statesSection">States</a><a href="#graphSection">Graph</a><a href="#tableSection">Table</a><a href="#conflictSection">Conflicts</a><a href="#parseSection">Parse</a>
+  </nav>
+  <div id="stickySteps" class="sticky-steps hidden" aria-label="Step controls">
+    <label for="stepMode">Steps:</label>
+    <select id="stepMode"><option value="states">States</option><option value="table">Table</option><option value="parse">Parsing</option></select>
+    <button id="stickyPrev" class="btn small">◀ Prev</button>
+    <button id="stickyNext" class="btn small primary">Next ▶</button>
+    <button id="stickyAll" class="btn small">Build All</button>
+  </div>
+</div>
 
 <main class="app-shell">
   <aside class="sidebar">
@@ -47,7 +59,7 @@
   </aside>
 
   <div class="content-panel">
-    <section class="card">
+    <section class="card" id="grammarSection">
       <h2>Grammar Input</h2>
       <div class="grammar-row">
         <textarea id="grammarInput" rows="6" placeholder="Enter grammar (one production per line)&#10;E -> E + T&#10;E -> T&#10;T -> id"></textarea>
@@ -112,6 +124,11 @@
     <!-- String Parsing -->
     <section class="card hidden" id="parseSection">
       <h2>String Parsing</h2>
+      <div class="parse-example-row">
+        <label for="parseExampleSelect">Try a string:</label>
+        <select id="parseExampleSelect" aria-label="Example string"></select>
+        <span class="hint">Select a sample, then click Parse. Results depend on the parser type.</span>
+      </div>
       <div class="parse-row">
         <input type="text" id="parseInput" placeholder="Enter tokens separated by spaces, e.g.: id + id" />
         <button id="parseBtn" class="btn primary">Parse</button>

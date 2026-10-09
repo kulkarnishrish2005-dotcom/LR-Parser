@@ -10,43 +10,67 @@ import { formatLR0Item, formatLR1Item } from './items.js';
  * @param {import('./grammar.js').Production[]} productions
  * @param {HTMLElement} container
  */
-export function renderGraph(collection, parserType, productions, container) {
-  container.innerHTML = '';
+export function graphNodeSummary(state, productions, formatItem) {
+  const items = state.items.map(item => formatItem(item, productions));
+  const lines = items.slice(0, 3).map(line => line.length > 46 ? `${line.slice(0, 43)}…` : line);
+  if (items.length > 3) lines.push(`+ ${items.length - 3} more items`);
+  return lines;
+}
+
+export function renderGraph(collection, parserType, productions, container, onStateClick = null) {
+  container.innerHTML = '<h3>State Graph</h3>';
   const { states } = collection;
   if (states.length === 0) return;
 
   const useLR1 = parserType === 'CLR1' || parserType === 'LALR1';
   const formatItem = useLR1 ? formatLR1Item : formatLR0Item;
 
-  // Measure text to size nodes
+  // A short node summary keeps the graph readable; full items remain in the inspector.
   const nodeData = states.map(state => {
-    const lines = state.items.map(item => formatItem(item, productions));
+    const lines = graphNodeSummary(state, productions, formatItem);
     const title = `I${state.id}`;
     const maxLen = Math.max(title.length, ...lines.map(l => l.length));
-    const width = Math.max(140, maxLen * 8 + 24);
+    const width = Math.max(160, maxLen * 7.2 + 24);
     const height = 28 + lines.length * 18 + 8;
     return { id: state.id, title, lines, width, height };
   });
 
-  // Simple grid layout
-  const cols = Math.max(1, Math.ceil(Math.sqrt(states.length)));
-  const padX = 40, padY = 40;
-  const cellW = Math.max(...nodeData.map(n => n.width)) + padX;
-  const cellH = Math.max(...nodeData.map(n => n.height)) + padY;
-
-  nodeData.forEach((node, i) => {
-    node.x = (i % cols) * cellW + padX;
-    node.y = Math.floor(i / cols) * cellH + padY;
-  });
-
-  const svgW = cols * cellW + padX * 2;
-  const svgH = (Math.ceil(states.length / cols)) * cellH + padY * 2;
+  // Breadth-first layers place most GOTO edges between adjacent rows.
+  const byId = new Map(nodeData.map(node => [node.id, node]));
+  const stateById = new Map(states.map(state => [state.id, state]));
+  const depth = new Map([[states[0].id, 0]]);
+  const queue = [states[0].id];
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i];
+    for (const target of stateById.get(id)?.transitions.values() || []) {
+      if (stateById.has(target) && !depth.has(target)) {
+        depth.set(target, depth.get(id) + 1);
+        queue.push(target);
+      }
+    }
+  }
+  for (const state of states) if (!depth.has(state.id)) depth.set(state.id, Math.max(...depth.values()) + 1);
+  const layers = [];
+  for (const node of nodeData) {
+    const level = depth.get(node.id);
+    (layers[level] ||= []).push(node);
+  }
+  const padX = 55, padY = 45;
+  const cellW = Math.max(...nodeData.map(n => n.width)) + 90;
+  const cellH = Math.max(...nodeData.map(n => n.height)) + 90;
+  const cols = Math.max(...layers.map(layer => layer?.length || 0));
+  const svgW = cols * cellW + padX * 2 + 60;
+  const svgH = layers.length * cellH + padY * 2;
+  layers.forEach((layer, row) => layer?.forEach((node, col) => {
+    node.x = padX + (cols - layer.length) * cellW / 2 + col * cellW;
+    node.y = padY + row * cellH;
+  }));
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', svgW);
   svg.setAttribute('height', svgH);
   svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
-  svg.style.maxWidth = '100%';
+  svg.style.maxWidth = 'none';
   svg.style.height = 'auto';
 
   // Defs for arrowhead
@@ -67,43 +91,36 @@ export function renderGraph(collection, parserType, productions, container) {
 
   // Draw edges
   for (const state of states) {
-    const from = nodeData[state.id];
+    const from = byId.get(state.id);
     for (const [sym, targetId] of state.transitions) {
-      const to = nodeData[targetId];
-      const fromCx = from.x + from.width / 2;
-      const fromCy = from.y + from.height / 2;
-      const toCx = to.x + to.width / 2;
-      const toCy = to.y + to.height / 2;
+      const to = byId.get(targetId);
+      if (!to) continue;
+      let pathData, labelX, labelY;
+      if (from.id === to.id) {
+        const x = from.x + from.width;
+        const y = from.y + from.height / 2;
+        pathData = `M ${x} ${y - 8} C ${x + 55} ${y - 65}, ${x + 55} ${y + 65}, ${x} ${y + 8}`;
+        labelX = x + 45; labelY = y - 52;
+      } else if (to.y > from.y) {
+        const x1 = from.x + from.width / 2, y1 = from.y + from.height;
+        const x2 = to.x + to.width / 2, y2 = to.y - 5;
+        pathData = `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`;
+        labelX = (x1 + x2) / 2; labelY = (y1 + y2) / 2 - 6;
+      } else {
+        const x1 = from.x + from.width, y1 = from.y + from.height / 2;
+        const x2 = to.x + to.width, y2 = to.y + to.height / 2;
+        const routeX = Math.max(x1, x2) + 35;
+        pathData = `M ${x1} ${y1} C ${routeX} ${y1}, ${routeX} ${y2}, ${x2 + 5} ${y2}`;
+        labelX = routeX; labelY = (y1 + y2) / 2 - 6;
+      }
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', pathData);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#888');
+      path.setAttribute('stroke-width', '1.5');
+      path.setAttribute('marker-end', 'url(#arrowhead)');
+      svg.appendChild(path);
 
-      // Calculate edge endpoint on node boundary
-      const dx = toCx - fromCx;
-      const dy = toCy - fromCy;
-
-      if (dx === 0 && dy === 0) continue; // self-loop — skip for simplicity
-
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const nx = dx / dist;
-      const ny = dy / dist;
-
-      // Offset start/end to node boundaries
-      const x1 = fromCx + nx * (from.width / 2);
-      const y1 = fromCy + ny * (from.height / 2);
-      const x2 = toCx - nx * (to.width / 2 + 5);
-      const y2 = toCy - ny * (to.height / 2 + 5);
-
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', x1);
-      line.setAttribute('y1', y1);
-      line.setAttribute('x2', x2);
-      line.setAttribute('y2', y2);
-      line.setAttribute('stroke', '#888');
-      line.setAttribute('stroke-width', '1.5');
-      line.setAttribute('marker-end', 'url(#arrowhead)');
-      svg.appendChild(line);
-
-      // Label
-      const labelX = (x1 + x2) / 2;
-      const labelY = (y1 + y2) / 2 - 6;
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', labelX);
       text.setAttribute('y', labelY);
@@ -119,6 +136,16 @@ export function renderGraph(collection, parserType, productions, container) {
   // Draw nodes
   for (const node of nodeData) {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    if (onStateClick) {
+      g.style.cursor = 'pointer';
+      g.setAttribute('role', 'button');
+      g.setAttribute('tabindex', '0');
+      g.setAttribute('aria-label', `Inspect state I${node.id}`);
+      g.addEventListener('click', () => onStateClick(node.id));
+      g.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') onStateClick(node.id);
+      });
+    }
 
     const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     rect.setAttribute('x', node.x);

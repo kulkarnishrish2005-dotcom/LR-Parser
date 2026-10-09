@@ -12,6 +12,8 @@ A browser-based compiler design project demonstrating bottom-up parsing with LR(
 6. Click "Build All" to complete the table
 7. Enter a test string and click "Parse" to parse it
 
+The **Try a string** picker beside the parse input supplies sample strings for each built-in grammar. Choosing one fills the input; click **Parse** to see the trace. Parser type can change the result, especially for conflict grammars.
+
 ## Supported Grammar Syntax
 
 - **Production separator**: `->` or `→` (arrow)
@@ -45,6 +47,10 @@ T -> id
 | **Conflict Grammar** | `E -> E + E`, `E -> E * E`, `E -> id` (demonstrates shift-reduce conflicts) |
 | **Simple Grammar** | `S -> A`, `A -> a` |
 | **Epsilon Grammar** | `S -> A B`, `A -> a`, `A -> ε`, `B -> b` |
+| **Assignment (LR(1), not SLR(1))** | `S -> L = R / R`, `L -> * R / id`, `R -> L`; try `id = id` in CLR(1) or LALR(1) |
+| **Reduce-Reduce Conflict** | `S -> A / B`, `A -> a`, `B -> a`; shows competing reductions |
+| **Balanced Parentheses** | `S -> ( S ) S / ε`; try `( ) ( )` in SLR(1) |
+| **Right Recursive List** | `L -> id , L / id`; try `id , id` in SLR(1) |
 
 ## Parser Types
 

@@ -8,6 +8,9 @@ import { buildLALRFromCLR } from '../src/lalr.js';
 import { buildParseTable } from '../src/table.js';
 import { tokenize, parseString } from '../src/parser.js';
 import { computeFirstVT, computeLastVT, buildOperatorPrecedenceModel, parseOperatorPrecedence } from '../src/operator-precedence.js';
+import { explainActions } from '../src/action-explanation.js';
+import { graphNodeSummary } from '../src/graph.js';
+import { EXAMPLES, STRING_EXAMPLES } from '../src/examples.js';
 
 let passed = 0;
 let failed = 0;
@@ -72,6 +75,44 @@ assert(parseGrammar('').productions.length === 0,
 
 assert(parseGrammar('invalid').errors.length > 0,
   'Returns errors for invalid input');
+
+console.log('\n=== BUILT-IN EXAMPLES ===');
+assert(Object.values(EXAMPLES).every(source => {
+  const parsed = parseGrammar(source);
+  return parsed.errors.length === 0 && validateGrammar(parsed).length === 0;
+}), 'Every built-in example is a valid grammar');
+assert(Object.keys(EXAMPLES).every(name => STRING_EXAMPLES[name]?.length >= 2 &&
+  STRING_EXAMPLES[name].every(sample => sample.label && sample.input.trim())),
+  'Every built-in grammar has selectable nonempty string examples');
+
+const assignment = augmentGrammar(parseGrammar(EXAMPLES['Assignment (LR(1), not SLR(1))']));
+const assignmentFirst = computeFirstSets(assignment);
+const assignmentLR0 = buildLR0Collection(assignment);
+const assignmentCLR = buildCLRCollection(assignment, assignmentFirst);
+const assignmentLALR = buildLALRFromCLR(assignmentCLR);
+const assignmentSLRTable = buildParseTable('SLR1', assignmentLR0, assignment, computeFollowSets(assignment, assignmentFirst));
+const assignmentCLRTable = buildParseTable('CLR1', assignmentCLR, assignment);
+const assignmentLALRTable = buildParseTable('LALR1', assignmentLALR, assignment);
+assert(assignmentSLRTable.conflicts.length > 0 && assignmentCLRTable.conflicts.length === 0 && assignmentLALRTable.conflicts.length === 0,
+  'Assignment example distinguishes SLR from CLR and LALR');
+assert(parseString(['id', '=', 'id'], assignmentCLRTable, assignment.productions).accepted &&
+  parseString(['id', '=', 'id'], assignmentLALRTable, assignment.productions).accepted,
+  'Assignment example accepts id = id in CLR and LALR');
+
+const reduceReduce = augmentGrammar(parseGrammar(EXAMPLES['Reduce-Reduce Conflict']));
+const reduceReduceTable = buildParseTable('SLR1', buildLR0Collection(reduceReduce), reduceReduce,
+  computeFollowSets(reduceReduce, computeFirstSets(reduceReduce)));
+assert(reduceReduceTable.conflicts.some(conflict => conflict.type === 'reduce-reduce') &&
+  parseString(['a'], reduceReduceTable, reduceReduce.productions).steps.at(-1).action.startsWith('CONFLICT:'),
+  'Reduce-reduce example stops parsing at competing reductions');
+
+for (const [name, input] of [['Balanced Parentheses', ['(', ')', '(', ')']], ['Right Recursive List', ['id', ',', 'id']]]) {
+  const example = augmentGrammar(parseGrammar(EXAMPLES[name]));
+  const exampleTable = buildParseTable('SLR1', buildLR0Collection(example), example,
+    computeFollowSets(example, computeFirstSets(example)));
+  assert(exampleTable.conflicts.length === 0 && parseString(input, exampleTable, example.productions).accepted,
+    `${name} example accepts its demonstration input in SLR`);
+}
 
 // ─── Augmentation Tests ───
 console.log('\n=== GRAMMAR AUGMENTATION ===');
@@ -182,6 +223,32 @@ const conflictLR0 = buildLR0Collection(conflictAugmented);
 const conflictTable = buildParseTable('SLR1', conflictLR0, conflictAugmented, computeFollowSets(conflictAugmented, computeFirstSets(conflictAugmented)));
 assert(conflictTable.conflicts.length > 0,
   'Conflict grammar detects shift-reduce or reduce-reduce conflicts');
+const conflictInput = parseString(['id', '+', 'id', '*', 'id'], conflictTable, conflictAugmented.productions);
+assert(!conflictInput.accepted && conflictInput.steps.at(-1).action.startsWith('CONFLICT:'),
+  'LR parsing stops at a conflicting ACTION cell');
+assertContains(conflictInput.steps.at(-1).action, 'ACTION[',
+  'Conflict parse step identifies the ambiguous cell');
+
+console.log('\n=== ACTION EXPLANATIONS ===');
+function actionExplanationFor(table, collection, grammar, type, actionType, follow = null) {
+  const [key, actions] = [...table.action].find(([, list]) => list.some(action => action.type === actionType));
+  const [stateId, symbol] = key.split(',');
+  return explainActions(collection.states[Number(stateId)], symbol, actions, type, grammar.productions, follow)
+    .find(detail => detail.title.startsWith(actionType.toUpperCase()));
+}
+const slrFollow = computeFollowSets(slrGrammaAugmented, computeFirstSets(slrGrammaAugmented));
+const slrShift = actionExplanationFor(slrTable, slrResult, slrGrammaAugmented, 'SLR1', 'shift', slrFollow);
+const slrReduce = actionExplanationFor(slrTable, slrResult, slrGrammaAugmented, 'SLR1', 'reduce', slrFollow);
+const slrAccept = actionExplanationFor(slrTable, slrResult, slrGrammaAugmented, 'SLR1', 'accept', slrFollow);
+assert(slrShift.items.length > 0 && slrShift.reason.includes('GOTO'), 'Shift explanation identifies producing item and target');
+assert(slrReduce.items.length > 0 && slrReduce.reason.includes('FOLLOW('), 'SLR reduction explains FOLLOW placement');
+assert(slrAccept.items.length > 0 && slrAccept.reason.includes('augmented'), 'Accept explanation identifies augmented item');
+const clrReduce = actionExplanationFor(clrTable, clrResult, lr0GrammarAugmented, 'CLR1', 'reduce');
+assert(clrReduce.items.length > 0 && clrReduce.reason.includes('lookahead'), 'CLR reduction explains item lookahead');
+
+console.log('\n=== GRAPH SUMMARY ===');
+assertEqual(graphNodeSummary({ items: [1, 2, 3, 4, 5] }, [], item => `item ${item}`),
+  ['item 1', 'item 2', 'item 3', '+ 2 more items'], 'Graph nodes show at most three item lines and a remainder count');
 
 // ─── String Parsing Tests ───
 console.log('\n=== STRING PARSING ===');
@@ -227,9 +294,12 @@ assert(acceptedPrec.accepted === true,
 const rejectedPrec = parseOperatorPrecedence(['id', '+', '*', 'id'], precedenceModel);
 assert(rejectedPrec.accepted === false,
   'Operator precedence parser rejects invalid arithmetic input');
+assert(rejectedPrec.steps.at(-1).action.startsWith('REJECT:'),
+  'Operator precedence rejection ends with a visible REJECT row');
 
 // ─── Summary ───
 console.log(`\n=== TEST SUMMARY ===`);
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);
 console.log(failed === 0 ? '✓ ALL TESTS PASSED' : '✗ SOME TESTS FAILED');
+if (failed > 0) process.exitCode = 1;
