@@ -274,10 +274,14 @@ const precedenceModel = buildOperatorPrecedenceModel(precedenceGrammar);
 const firstVT = computeFirstVT(precedenceGrammar);
 assert(firstVT.get('E')?.has('id') && firstVT.get('E')?.has('('),
   'FIRSTVT(E) contains leading terminals');
+assert(firstVT.get('E')?.has('+') && firstVT.get('E')?.has('*'),
+  'FIRSTVT includes terminals after an initial nonterminal');
 
 const lastVT = computeLastVT(precedenceGrammar);
 assert(lastVT.get('E')?.has('id') && lastVT.get('E')?.has(')'),
   'LASTVT(E) contains trailing terminals');
+assert(lastVT.get('E')?.has('+') && lastVT.get('E')?.has('*'),
+  'LASTVT includes terminals before a final nonterminal');
 
 assert(precedenceModel.relations.size > 0,
   'Precedence relations are generated between terminals');
@@ -290,6 +294,14 @@ assert(conflictModel.conflicts.length > 0,
 const acceptedPrec = parseOperatorPrecedence(['id', '+', 'id'], precedenceModel);
 assert(acceptedPrec.accepted === true,
   'Operator precedence parser accepts valid arithmetic input');
+assert(acceptedPrec.steps.some(step => step.action.startsWith('REDUCE E → E + T')),
+  'Operator precedence trace reduces using a grammar production');
+assert(parseOperatorPrecedence(['(', 'id', '+', 'id', ')', '*', 'id'], precedenceModel).accepted,
+  'Operator precedence parser handles grouping and multiplication');
+assert(!parseOperatorPrecedence(['foo'], precedenceModel).accepted,
+  'Operator precedence parser rejects terminals absent from the grammar');
+assert(!parseOperatorPrecedence(['id', '$', '+', 'id'], precedenceModel).accepted,
+  'End marker cannot appear inside the input');
 
 const rejectedPrec = parseOperatorPrecedence(['id', '+', '*', 'id'], precedenceModel);
 assert(rejectedPrec.accepted === false,
@@ -297,9 +309,29 @@ assert(rejectedPrec.accepted === false,
 assert(rejectedPrec.steps.at(-1).action.startsWith('REJECT:'),
   'Operator precedence rejection ends with a visible REJECT row');
 
+const boundedGrammar = parseGrammar('S -> a B b\nB -> c');
+const boundedModel = buildOperatorPrecedenceModel(boundedGrammar);
+assert(boundedModel.relations.get('a')?.get('b') === '=',
+  'a B b creates an equality relation between a and b');
+assert(parseOperatorPrecedence(['a', 'c', 'b'], boundedModel).accepted &&
+  !parseOperatorPrecedence(['a', 'b'], boundedModel).accepted,
+  'Handle reduction distinguishes valid a c b from invalid a b');
+
+const narrowModel = buildOperatorPrecedenceModel(parseGrammar('S -> id + id'));
+assert(parseOperatorPrecedence(['id', '+', 'id'], narrowModel).accepted &&
+  !parseOperatorPrecedence(['id', '+', 'id', '+', 'id'], narrowModel).accepted,
+  'Parser follows supplied productions rather than built-in operator priorities');
+
+const invalidOP = buildOperatorPrecedenceModel(parseGrammar('S -> A B\nA -> a\nB -> b'));
+assert(invalidOP.errors.length > 0 && !parseOperatorPrecedence(['a', 'b'], invalidOP).accepted,
+  'Adjacent nonterminals are rejected as an invalid operator-precedence grammar');
+assert(!parseOperatorPrecedence(['a', 'b'], conflictModel).accepted,
+  'Parser refuses a precedence table with conflicting relations');
+
 // ─── Summary ───
 console.log(`\n=== TEST SUMMARY ===`);
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);
 console.log(failed === 0 ? '✓ ALL TESTS PASSED' : '✗ SOME TESTS FAILED');
 if (failed > 0) process.exitCode = 1;
+

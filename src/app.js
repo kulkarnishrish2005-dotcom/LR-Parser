@@ -832,6 +832,11 @@ function renderOperatorPrecedenceConflicts() {
     return;
   }
 
+  if (precedenceModel.errors?.length) {
+    el.innerHTML = `<div class="msg error"><strong>Invalid operator-precedence grammar</strong><br>${precedenceModel.errors.map(escHtml).join('<br>')}</div>`;
+    return;
+  }
+
   if (precedenceModel.conflicts.length === 0) {
     el.innerHTML = '<div class="msg success">✓ No precedence conflicts detected.</div>';
     return;
@@ -1085,3 +1090,4 @@ function escHtml(s) {
 
 // ─── Init ────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
+

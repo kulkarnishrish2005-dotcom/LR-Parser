@@ -1,371 +1,161 @@
-// Operator precedence parser support kept separate from the LR engine.
+// Grammar-based operator-precedence construction and shift/reduce parsing.
 
-function isEpsilon(symbol) {
-  return symbol === 'ε' || symbol === 'epsilon' || symbol === 'ɛ';
-}
+const terminal = (s, g) => g.terminals.has(s);
+const nonterminal = (s, g) => g.nonTerminals.has(s);
 
-function isTerminal(symbol, grammar) {
-  if (!symbol || isEpsilon(symbol)) return false;
-  return grammar.terminals?.has(symbol) ?? false;
-}
-
-function isNonTerminal(symbol, grammar) {
-  return !!symbol && !isTerminal(symbol, grammar) && !!grammar.nonTerminals?.has(symbol);
-}
-
-function getRulesByLhs(grammar, lhs) {
-  return (grammar.productions || []).filter(p => p.lhs === lhs);
-}
-
-function computeNullable(grammar) {
-  const nullable = new Set();
+function computeVT(grammar, reverse) {
+  const sets = new Map([...grammar.nonTerminals].map(nt => [nt, new Set()]));
   let changed = true;
-
   while (changed) {
     changed = false;
-    for (const prod of grammar.productions || []) {
-      const rhs = prod.rhs || [];
-      if (rhs.length === 0 || rhs.every(symbol => isEpsilon(symbol) || nullable.has(symbol))) {
-        if (!nullable.has(prod.lhs)) {
-          nullable.add(prod.lhs);
-          changed = true;
-        }
+    for (const { lhs, rhs } of grammar.productions) {
+      const symbols = reverse ? [...rhs].reverse() : rhs;
+      const [first, second] = symbols;
+      const additions = [];
+      if (terminal(first, grammar)) additions.push(first);
+      if (nonterminal(first, grammar)) {
+        if (terminal(second, grammar)) additions.push(second);
+        additions.push(...sets.get(first));
+      }
+      for (const t of additions) {
+        if (!sets.get(lhs).has(t)) { sets.get(lhs).add(t); changed = true; }
       }
     }
   }
-
-  return nullable;
+  return sets;
 }
 
-function computeFirstVTInternal(grammar) {
-  const firstVT = new Map();
-  for (const nt of grammar.nonTerminals || []) {
-    firstVT.set(nt, new Set());
-  }
-
-  const nullable = computeNullable(grammar);
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const prod of grammar.productions || []) {
-      const lhs = prod.lhs;
-      const rhs = prod.rhs || [];
-      if (rhs.length === 0) continue;
-      let canSkip = true;
-      for (const symbol of rhs) {
-        if (isEpsilon(symbol)) continue;
-        if (isTerminal(symbol, grammar)) {
-          if (!firstVT.get(lhs)?.has(symbol)) {
-            firstVT.get(lhs)?.add(symbol);
-            changed = true;
-          }
-          canSkip = false;
-          break;
-        }
-        if (isNonTerminal(symbol, grammar)) {
-          const set = firstVT.get(symbol) || new Set();
-          for (const term of set) {
-            if (!firstVT.get(lhs)?.has(term)) {
-              firstVT.get(lhs)?.add(term);
-              changed = true;
-            }
-          }
-          if (!nullable.has(symbol)) {
-            canSkip = false;
-            break;
-          }
-          continue;
-        }
-        canSkip = false;
-        break;
-      }
-      if (canSkip && !isTerminal(lhs, grammar) && lhs && !firstVT.get(lhs)?.has('ε')) {
-        firstVT.get(lhs)?.add('ε');
-      }
-    }
-  }
-
-  for (const [nt, set] of firstVT.entries()) {
-    set.delete('ε');
-  }
-
-  return firstVT;
-}
-
-function computeLastVTInternal(grammar) {
-  const lastVT = new Map();
-  for (const nt of grammar.nonTerminals || []) {
-    lastVT.set(nt, new Set());
-  }
-
-  const nullable = computeNullable(grammar);
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const prod of grammar.productions || []) {
-      const lhs = prod.lhs;
-      const rhs = prod.rhs || [];
-      if (rhs.length === 0) continue;
-      let canSkip = true;
-      for (let i = rhs.length - 1; i >= 0; i--) {
-        const symbol = rhs[i];
-        if (isEpsilon(symbol)) continue;
-        if (isTerminal(symbol, grammar)) {
-          if (!lastVT.get(lhs)?.has(symbol)) {
-            lastVT.get(lhs)?.add(symbol);
-            changed = true;
-          }
-          canSkip = false;
-          break;
-        }
-        if (isNonTerminal(symbol, grammar)) {
-          const set = lastVT.get(symbol) || new Set();
-          for (const term of set) {
-            if (!lastVT.get(lhs)?.has(term)) {
-              lastVT.get(lhs)?.add(term);
-              changed = true;
-            }
-          }
-          if (!nullable.has(symbol)) {
-            canSkip = false;
-            break;
-          }
-          continue;
-        }
-        canSkip = false;
-        break;
-      }
-      if (canSkip && !isTerminal(lhs, grammar) && lhs && !lastVT.get(lhs)?.has('ε')) {
-        lastVT.get(lhs)?.add('ε');
-      }
-    }
-  }
-
-  for (const [nt, set] of lastVT.entries()) {
-    set.delete('ε');
-  }
-
-  return lastVT;
-}
-
-function addRelation(relations, left, right, relation, conflicts) {
-  const row = relations.get(left) || new Map();
-  const existing = row.get(right);
-  if (existing === undefined) {
-    row.set(right, relation);
-    relations.set(left, row);
-    return;
-  }
-  if (existing !== relation) {
-    conflicts.push({ left, right, relations: [existing, relation] });
-  }
-}
-
-export function computeFirstVT(grammar) {
-  return computeFirstVTInternal(grammar);
-}
-
-export function computeLastVT(grammar) {
-  return computeLastVTInternal(grammar);
-}
+export const computeFirstVT = grammar => computeVT(grammar, false);
+export const computeLastVT = grammar => computeVT(grammar, true);
 
 export function buildOperatorPrecedenceModel(grammar) {
   const firstVT = computeFirstVT(grammar);
   const lastVT = computeLastVT(grammar);
-  const relations = new Map();
+  const terminals = [...grammar.terminals, '$'];
+  const relations = new Map(terminals.map(t => [t, new Map()]));
   const conflicts = [];
-  const terminals = Array.from(grammar.terminals || []);
+  const errors = [];
 
-  for (const terminal of terminals) {
-    relations.set(terminal, new Map());
-  }
-
-  const setGlobalRelation = (left, right, rel) => {
-    if (!left || !right || left === right) return;
-    const leftRow = relations.get(left) || new Map();
-    const existing = leftRow.get(right);
-    if (existing === undefined) {
-      leftRow.set(right, rel);
-      relations.set(left, leftRow);
-      return;
-    }
-    if (existing !== rel) {
-      conflicts.push({ left, right, relations: [existing, rel] });
-    }
-  };
-
-  // Sentinel values ensure the parser can start and terminate cleanly.
-  for (const terminal of terminals) {
-    setGlobalRelation('$', terminal, '<');
-    setGlobalRelation(terminal, '$', '>');
-  }
-
-  for (const prod of grammar.productions || []) {
-    const rhs = prod.rhs || [];
+  for (const { lhs, rhs } of grammar.productions) {
+    if (!rhs.length) errors.push(`${lhs} has an epsilon production.`);
     for (let i = 0; i < rhs.length - 1; i++) {
-      const left = rhs[i];
-      const right = rhs[i + 1];
-
-      if (isTerminal(left, grammar) && isTerminal(right, grammar)) {
-        setGlobalRelation(left, right, '=');
-      }
-
-      if (isTerminal(left, grammar) && isNonTerminal(right, grammar)) {
-        for (const term of firstVT.get(right) || []) {
-          if (term !== 'ε') setGlobalRelation(left, term, '<');
-        }
-      }
-
-      if (isNonTerminal(left, grammar) && isTerminal(right, grammar)) {
-        for (const term of lastVT.get(left) || []) {
-          if (term !== 'ε') setGlobalRelation(term, right, '>');
-        }
-      }
-
-      if (isNonTerminal(left, grammar) && isNonTerminal(right, grammar)) {
-        for (const leftTerm of lastVT.get(left) || []) {
-          if (leftTerm === 'ε') continue;
-          for (const rightTerm of firstVT.get(right) || []) {
-            if (rightTerm === 'ε') continue;
-            setGlobalRelation(leftTerm, rightTerm, '>');
-          }
-        }
+      if (nonterminal(rhs[i], grammar) && nonterminal(rhs[i + 1], grammar)) {
+        errors.push(`${lhs} has adjacent nonterminals ${rhs[i]} ${rhs[i + 1]}.`);
       }
     }
   }
+  if (grammar.terminals.has('$')) errors.push('$ is reserved as the input end marker.');
 
-  const precedence = new Map();
-  const defaultPrecedence = { '+': 10, '-': 10, '*': 20, '/': 20, '%': 20, '^': 30, '(': 0, ')': 0 };
-  for (const terminal of terminals) {
-    precedence.set(terminal, defaultPrecedence[terminal] ?? 50);
+  function add(left, right, relation) {
+    const row = relations.get(left);
+    if (!row) return;
+    const old = row.get(right);
+    if (old && old !== relation) {
+      const conflict = conflicts.find(c => c.left === left && c.right === right);
+      if (conflict) {
+        if (!conflict.relations.includes(relation)) conflict.relations.push(relation);
+      } else conflicts.push({ left, right, relations: [old, relation] });
+    } else row.set(right, relation);
   }
 
-  return {
-    grammar,
-    firstVT,
-    lastVT,
-    terminals,
-    relations,
-    conflicts,
-    precedence,
-  };
-}
+  for (const { rhs } of grammar.productions) {
+    for (let i = 0; i < rhs.length - 1; i++) {
+      const a = rhs[i], b = rhs[i + 1], c = rhs[i + 2];
+      if (terminal(a, grammar) && terminal(b, grammar)) add(a, b, '=');
+      if (terminal(a, grammar) && nonterminal(b, grammar)) {
+        for (const t of firstVT.get(b)) add(a, t, '<');
+      }
+      if (nonterminal(a, grammar) && terminal(b, grammar)) {
+        for (const t of lastVT.get(a)) add(t, b, '>');
+      }
+      if (terminal(a, grammar) && nonterminal(b, grammar) && terminal(c, grammar)) add(a, c, '=');
+    }
+  }
+  for (const t of firstVT.get(grammar.startSymbol) || []) add('$', t, '<');
+  for (const t of lastVT.get(grammar.startSymbol) || []) add(t, '$', '>');
 
-function getRelation(left, right, model) {
-  if (!left || !right) return null;
-  return model.relations.get(left)?.get(right) || null;
-}
-
-function isOperator(token, model) {
-  if (!token || token === '(' || token === ')' || token === '$') return false;
-  const isIdentifierLike = /^[A-Za-z_][A-Za-z0-9_]*$/.test(token);
-  return model.terminals.includes(token) && !isIdentifierLike;
-}
-
-function shouldPopOperator(topOp, currentOp, model) {
-  const relation = getRelation(topOp, currentOp, model);
-  if (!relation) return false;
-  const precedence = model.precedence || new Map();
-  if (relation === '>') return true;
-  if (relation === '=') return (precedence.get(topOp) ?? 0) >= (precedence.get(currentOp) ?? 0);
-  if (relation === '<') return false;
-  return false;
+  return { grammar, firstVT, lastVT, terminals, relations, conflicts, errors };
 }
 
 export function parseOperatorPrecedence(tokens, model) {
-  const input = Array.isArray(tokens) ? tokens.filter(token => token !== '') : [];
-  const output = [];
-  const operatorStack = [];
+  const { grammar, relations, conflicts, errors } = model;
+  const input = Array.isArray(tokens) ? tokens.filter(Boolean) : [];
+  const embeddedEnd = input.indexOf('$');
+  if (embeddedEnd === input.length - 1) input.pop();
+  input.push('$');
+  const stack = [{ terminal: '$' }];
   const steps = [];
-
-  const record = (action, stackText, remainingText) => {
-    steps.push({ stack: stackText, input: remainingText, action });
-  };
-  const reject = (error) => {
-    steps.push({ stack: `${operatorStack.join(' ')} | ${output.join(' ')}`, input: '', action: `REJECT: ${error}` });
+  let pos = 0;
+  const show = () => stack.map(x => x.terminal ?? `{${[...x.roots].join('/')}}`).join(' ');
+  const record = action => steps.push({ stack: show(), input: input.slice(pos).join(' '), action });
+  const reject = error => {
+    record(`REJECT: ${error}`);
     return { steps, accepted: false, error };
   };
+  if (errors.length) return reject(errors.join(' '));
+  if (conflicts.length) return reject('The precedence table has conflicting relations.');
+  if (embeddedEnd >= 0 && embeddedEnd !== input.length - 1) return reject('$ may appear only at the end of the input.');
+  const unknown = input.slice(0, -1).find(t => !grammar.terminals.has(t));
+  if (unknown) return reject(`Unknown terminal ${unknown}.`);
 
-  for (const token of input) {
-    const stackText = `${operatorStack.join(' ')} | ${output.join(' ')}`;
-    const remainingText = input.slice(input.indexOf(token)).join(' ');
-
-    if (token === '(') {
-      operatorStack.push(token);
-      record(`SHIFT (`, stackText, remainingText);
-      continue;
-    }
-
-    if (token === ')') {
-      let found = false;
-      while (operatorStack.length > 0) {
-        const op = operatorStack.pop();
-        if (op === '(') {
-          found = true;
-          break;
+  // A -> B has no terminal-bounded handle. Record every nonterminal that a
+  // reduced substring can derive through a chain of unit productions.
+  function unitClosure(initial) {
+    const roots = new Set(initial);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const { lhs, rhs } of grammar.productions) {
+        if (rhs.length === 1 && nonterminal(rhs[0], grammar) && roots.has(rhs[0]) && !roots.has(lhs)) {
+          roots.add(lhs); changed = true;
         }
-        output.push(op);
       }
-      if (!found) {
-        record('ERROR: missing opening parenthesis', stackText, remainingText);
-        return reject('Missing opening parenthesis');
-      }
-      record(`REDUCE (...)`, stackText, remainingText);
+    }
+    return roots;
+  }
+  function topTerminal(from = stack.length - 1) {
+    for (let i = from; i >= 0; i--) if (stack[i].terminal !== undefined) return i;
+    return -1;
+  }
+
+  const maxSteps = Math.max(100, 10 * input.length + 10 * grammar.productions.length);
+  for (let n = 0; n < maxSteps; n++) {
+    if (pos === input.length - 1 && stack.length === 2 &&
+        stack[0].terminal === '$' && stack[1].roots?.has(grammar.startSymbol)) {
+      record('ACCEPT');
+      return { steps, accepted: true, error: null };
+    }
+    const lookahead = input[pos];
+    const top = topTerminal();
+    const relation = relations.get(stack[top].terminal)?.get(lookahead);
+    if (!relation) return reject(`No precedence relation for ${stack[top].terminal} and ${lookahead}.`);
+    if (relation === '<' || relation === '=') {
+      if (lookahead === '$') return reject('Input ended before the start symbol was derived.');
+      record(`SHIFT ${lookahead}`);
+      stack.push({ terminal: lookahead });
+      pos++;
       continue;
     }
 
-    if (!isOperator(token, model)) {
-      output.push(token);
-      record(`SHIFT ${token}`, stackText, remainingText);
-      continue;
+    // Search backward for the nearest '<' between consecutive stack terminals.
+    let right = top, boundary = -1;
+    while (right > 0) {
+      const left = topTerminal(right - 1);
+      const between = relations.get(stack[left].terminal)?.get(stack[right].terminal);
+      if (between === '<') { boundary = left + 1; break; }
+      if (between !== '=') return reject('No valid handle boundary on the stack.');
+      right = left;
     }
-
-    while (
-      operatorStack.length > 0 &&
-      operatorStack[operatorStack.length - 1] !== '(' &&
-      shouldPopOperator(operatorStack[operatorStack.length - 1], token, model)
-    ) {
-      output.push(operatorStack.pop());
-    }
-
-    operatorStack.push(token);
-    record(`SHIFT ${token}`, stackText, remainingText);
+    if (boundary < 0) return reject('No valid handle boundary on the stack.');
+    const handle = stack.slice(boundary);
+    const matches = grammar.productions.filter(({ rhs }) =>
+      rhs.length === handle.length && rhs.every((symbol, i) =>
+        terminal(symbol, grammar) ? handle[i].terminal === symbol : handle[i].roots?.has(symbol)));
+    if (!matches.length) return reject(`No production matches handle ${handle.map(x => x.terminal ?? 'N').join(' ')}.`);
+    stack.splice(boundary, stack.length - boundary, { roots: unitClosure(matches.map(p => p.lhs)) });
+    record(`REDUCE ${matches.map(p => `${p.lhs} → ${p.rhs.join(' ')}`).join(' / ')}`);
   }
-
-  while (operatorStack.length > 0) {
-    const op = operatorStack.pop();
-    if (op === '(') {
-      return reject('Unbalanced parentheses');
-    }
-    output.push(op);
-  }
-
-  const evalStack = [];
-  for (const item of output) {
-    if (!isOperator(item, model)) {
-      evalStack.push('operand');
-      continue;
-    }
-    if (evalStack.length < 2) {
-      return reject('Malformed operator precedence expression');
-    }
-    evalStack.pop();
-    evalStack.pop();
-    evalStack.push('expr');
-  }
-
-  const accepted = evalStack.length === 1;
-  if (accepted) {
-    steps.push({ stack: output.join(' '), input: '', action: 'ACCEPT' });
-  } else {
-    return reject('Expression rejected by the operator precedence parser');
-  }
-
-  return { steps, accepted, error: accepted ? null : 'Expression rejected by the operator precedence parser' };
+  return reject('Parsing exceeded the step limit.');
 }
 
-export function buildOperatorPrecedenceTable(grammar) {
-  return buildOperatorPrecedenceModel(grammar);
-}
+export const buildOperatorPrecedenceTable = buildOperatorPrecedenceModel;
